@@ -10,6 +10,7 @@ cfg:
     dataset_root: "/mnt/sarm-data/hf/lerobot/full_folding"
     state_key: "observation.state"
     progress_key: "progress_sparse"
+    video_backend: "pyav"
     state_norm_path: "dataset_meta"
     camera_names: [observation.images.base]
     seed: 42

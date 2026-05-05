@@ -61,6 +61,7 @@ class SARMWorkspace:
                 state_key=cfg.general.get("state_key", "observation.state"),
                 progress_key=cfg.general.get("progress_key", "progress_sparse"),
                 task_name=cfg.general.task_name,
+                video_backend=cfg.general.get("video_backend", "pyav"),
                 episode_limit=cfg.general.get("episode_limit", None),
             )
         return FrameGapLeRobotDataset(repo_id=repo_id,

@@ -44,7 +44,7 @@ class FullFoldingSarmDataset(torch.utils.data.Dataset):
         self.progress_key = progress_key
         self.task_name = task_name
         self.tolerance_s = tolerance_s
-        self.video_backend = video_backend or get_safe_default_codec()
+        self.video_backend = video_backend or "pyav"
 
         with open(self.root / "meta" / "info.json", "r") as f:
             self.info = json.load(f)
