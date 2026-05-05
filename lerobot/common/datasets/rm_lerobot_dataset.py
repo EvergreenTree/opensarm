@@ -101,13 +101,15 @@ class FullFoldingSarmDataset(torch.utils.data.Dataset):
             print(f"[Data] Warning: {missing} frame progress values are missing in {path}.")
         return values
 
-    def _build_sample_indices(self) -> list[int]:
-        indices: list[int] = []
+    def _build_sample_indices(self) -> np.ndarray:
+        arrays = []
         for row in self.episode_table.itertuples(index=False):
             start = int(getattr(row, "dataset_from_index"))
             end = int(getattr(row, "dataset_to_index"))
-            indices.extend(range(start, end))
-        return indices
+            arrays.append(np.arange(start, end, dtype=np.int64))
+        if not arrays:
+            return np.asarray([], dtype=np.int64)
+        return np.concatenate(arrays)
 
     def state_stats(self) -> dict[str, list[float]]:
         prefix = f"stats/{self.state_key}"

@@ -104,9 +104,13 @@ class SARMWorkspace:
         train_eps_dense, val_eps_dense = split_train_eval_episodes(valid_episodes_dense, 1 - cfg.train.val_portion, seed=cfg.general.seed)
 
         dataset_train_sparse = self._make_dataset(cfg.general.repo_id_sparse, train_eps_sparse, cfg.model.sparse_annotation_list)
-        dataset_train_dense = self._make_dataset(cfg.general.repo_id_dense, train_eps_dense, cfg.model.dense_annotation_list)
         dataset_val_sparse = self._make_dataset(cfg.general.repo_id_sparse, val_eps_sparse, cfg.model.sparse_annotation_list)
-        dataset_val_dense = self._make_dataset(cfg.general.repo_id_dense, val_eps_dense, cfg.model.dense_annotation_list)
+        if cfg.general.get("dataset_format", "opensarm_v2") == "lerobot_v3_full_folding" and cfg.general.repo_id_sparse == cfg.general.repo_id_dense:
+            dataset_train_dense = dataset_train_sparse
+            dataset_val_dense = dataset_val_sparse
+        else:
+            dataset_train_dense = self._make_dataset(cfg.general.repo_id_dense, train_eps_dense, cfg.model.dense_annotation_list)
+            dataset_val_dense = self._make_dataset(cfg.general.repo_id_dense, val_eps_dense, cfg.model.dense_annotation_list)
 
         dataloader_train_sparse = torch.utils.data.DataLoader(dataset_train_sparse, **cfg.dataloader)
         dataloader_val_sparse   = torch.utils.data.DataLoader(dataset_val_sparse, **cfg.val_dataloader)
