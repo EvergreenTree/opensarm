@@ -29,6 +29,7 @@ cfg:
   train:
     num_epochs: 1
     max_steps: 50
+    skip_eval_after_max_steps: true
     log_every: 1
     save_every: 100000
     val_portion: 0.25

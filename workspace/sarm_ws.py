@@ -388,7 +388,11 @@ class SARMWorkspace:
                 print(f"[Train] Reached max_steps={max_steps}; stopping epoch loop after smoke run.")
 
             # --- validation ---
-            if epoch % cfg.train.eval_every == 0:
+            val_loss = best_val
+            skip_eval = cfg.train.get("skip_eval_after_max_steps", False) and max_steps is not None and step >= max_steps
+            if skip_eval:
+                print("[Eval] Skipping validation after bounded smoke run.")
+            elif epoch % cfg.train.eval_every == 0:
                 subtask_model.eval(); stage_model.eval()
                 total_loss, num = 0.0, 0
                 print("running validation...")
