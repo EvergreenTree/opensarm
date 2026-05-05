@@ -25,7 +25,11 @@ class FrozenCLIPEncoder(nn.Module):
             if hasattr(text_embeds, "text_embeds"):
                 text_embeds = text_embeds.text_embeds
             elif hasattr(text_embeds, "pooler_output"):
-                text_embeds = self.model.text_projection(text_embeds.pooler_output)
+                pooled = text_embeds.pooler_output
+                if pooled.shape[-1] == self.model.text_projection.in_features:
+                    text_embeds = self.model.text_projection(pooled)
+                else:
+                    text_embeds = pooled
             else:
                 raise TypeError(f"Unexpected CLIP text output type: {type(text_embeds)}")
         return text_embeds
@@ -42,7 +46,11 @@ class FrozenCLIPEncoder(nn.Module):
             if hasattr(image_embeds, "image_embeds"):
                 image_embeds = image_embeds.image_embeds
             elif hasattr(image_embeds, "pooler_output"):
-                image_embeds = self.model.visual_projection(image_embeds.pooler_output)
+                pooled = image_embeds.pooler_output
+                if pooled.shape[-1] == self.model.visual_projection.in_features:
+                    image_embeds = self.model.visual_projection(pooled)
+                else:
+                    image_embeds = pooled
             else:
                 raise TypeError(f"Unexpected CLIP image output type: {type(image_embeds)}")
         return image_embeds
