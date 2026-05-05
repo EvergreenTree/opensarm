@@ -69,7 +69,7 @@ class FullFoldingSarmDataset(torch.utils.data.Dataset):
             raise ValueError(f"No episodes selected for {self.root}")
         self.episode_table = self.episode_table.sort_values("episode_index").reset_index(drop=True)
         self.episode_by_index = {
-            int(row.episode_index): row._asdict() for row in self.episode_table.itertuples(index=False)
+            int(row["episode_index"]): row for row in self.episode_table.to_dict("records")
         }
 
         paths = sorted((self.root / "data").glob("*/*.parquet"))
@@ -103,9 +103,9 @@ class FullFoldingSarmDataset(torch.utils.data.Dataset):
 
     def _build_sample_indices(self) -> np.ndarray:
         arrays = []
-        for row in self.episode_table.itertuples(index=False):
-            start = int(getattr(row, "dataset_from_index"))
-            end = int(getattr(row, "dataset_to_index"))
+        for row in self.episode_table.to_dict("records"):
+            start = int(row["dataset_from_index"])
+            end = int(row["dataset_to_index"])
             arrays.append(np.arange(start, end, dtype=np.int64))
         if not arrays:
             return np.asarray([], dtype=np.int64)
