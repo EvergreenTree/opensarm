@@ -73,7 +73,9 @@ The full dataset is video-decode bound if training reads random MP4 frames direc
 uv run python scripts/precompute_full_folding_clip_embeddings.py \
   --root /mnt/sarm-data/hf/lerobot/full_folding \
   --output /mnt/sarm-data/hf/lerobot/full_folding/cache/clip_image_embeddings.npy \
-  --done-output /mnt/sarm-data/hf/lerobot/full_folding/cache/clip_image_embeddings.done.npy
+  --done-output /mnt/sarm-data/hf/lerobot/full_folding/cache/clip_image_embeddings.done.npy \
+  --decode-batch-size 512 \
+  --encode-batch-size 512
 ```
 
 The script writes a resumable `.npy` memmap plus a `.done.npy` progress mask. The default cache is float16 with shape:
