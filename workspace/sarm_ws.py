@@ -353,11 +353,14 @@ class SARMWorkspace:
         # ==================== training loop ==================================
         best_val = float("inf")
         step = 0
+        max_steps = cfg.train.get("max_steps", None)
         
         for epoch in range(1, cfg.train.num_epochs + 1):
             subtask_model.train(); stage_model.train()
             with tqdm(dataloader_train_sparse, desc=f"Epoch {epoch}") as pbar:
                 for sparse_batch in pbar:
+                    if max_steps is not None and step >= max_steps:
+                        break
                     dense_batch = next(dense_iter_train)
                     sparse_batch = adapt_lerobot_batch_sarm(sparse_batch, camera_names=cfg.general.camera_names)
                     dense_batch = adapt_lerobot_batch_sarm(dense_batch, camera_names=cfg.general.camera_names)
@@ -380,6 +383,9 @@ class SARMWorkspace:
                         save_ckpt(stage_model, stage_optimizer, epoch, self.save_dir, input_name=f"stage_step_{step:06d}_loss_{stage_loss:.3f}")
 
                     step += 1
+
+            if max_steps is not None and step >= max_steps:
+                print(f"[Train] Reached max_steps={max_steps}; stopping epoch loop after smoke run.")
 
             # --- validation ---
             if epoch % cfg.train.eval_every == 0:
@@ -427,6 +433,9 @@ class SARMWorkspace:
                 best_val = val_loss
                 save_ckpt(subtask_model, subtask_optimizer, epoch, self.save_dir, input_name="subtask_best")
                 save_ckpt(stage_model, stage_optimizer, epoch, self.save_dir, input_name="stage_best")
+
+            if max_steps is not None and step >= max_steps:
+                break
 
         print(f"Training done. Best val_loss MSE = {best_val}")
         wandb.finish()
