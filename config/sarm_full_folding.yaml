@@ -73,7 +73,7 @@ cfg:
     grad_clip: 1.0
     log_every: 50
     eval_every: 1
-    save_every: 5_000
+    save_every: 100_000
     val_portion: 0.1
 
   eval:

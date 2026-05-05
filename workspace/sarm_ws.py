@@ -349,6 +349,11 @@ class SARMWorkspace:
 
         dense_iter_train = infinite_loader(dataloader_train_dense)
         dense_iter_val = infinite_loader(dataloader_val_dense)
+        single_dataset_progress = (
+            cfg.model.get("single_stage_progress", False)
+            and cfg.general.get("dataset_format", "opensarm_v2") == "lerobot_v3_full_folding"
+            and cfg.general.repo_id_sparse == cfg.general.repo_id_dense
+        )
         
         # ==================== training loop ==================================
         best_val = float("inf")
@@ -363,10 +368,13 @@ class SARMWorkspace:
                         break
                     dense_batch = next(dense_iter_train)
                     sparse_batch = adapt_lerobot_batch_sarm(sparse_batch, camera_names=cfg.general.camera_names)
-                    dense_batch = adapt_lerobot_batch_sarm(dense_batch, camera_names=cfg.general.camera_names)
 
                     sparse_result = train_step(sparse_batch, anno_type="sparse")
-                    dense_result = train_step(dense_batch, anno_type="dense")
+                    if single_dataset_progress:
+                        dense_result = sparse_result
+                    else:
+                        dense_batch = adapt_lerobot_batch_sarm(dense_batch, camera_names=cfg.general.camera_names)
+                        dense_result = train_step(dense_batch, anno_type="dense")
 
                     if step % cfg.train.log_every == 0:
                         log_data_sparse = {f"sparse/{k}": v for k, v in sparse_result.items()}
@@ -400,10 +408,13 @@ class SARMWorkspace:
                     for sparse_batch in dataloader_val_sparse:
                         dense_batch = next(dense_iter_val)
                         sparse_batch = adapt_lerobot_batch_sarm(sparse_batch, camera_names=cfg.general.camera_names)
-                        dense_batch = adapt_lerobot_batch_sarm(dense_batch, camera_names=cfg.general.camera_names)
 
                         sparse_result = valid_step(sparse_batch, anno_type="sparse")
-                        dense_result = valid_step(dense_batch, anno_type="dense")
+                        if single_dataset_progress:
+                            dense_result = sparse_result
+                        else:
+                            dense_batch = adapt_lerobot_batch_sarm(dense_batch, camera_names=cfg.general.camera_names)
+                            dense_result = valid_step(dense_batch, anno_type="dense")
 
                         if step % cfg.train.log_every == 0:
                             log_data_sparse = {f"sparse/{k}": v for k, v in sparse_result.items()}
