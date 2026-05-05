@@ -1,0 +1,33 @@
+defaults:
+  - sarm_full_folding
+
+cfg:
+  general:
+    task_name: "full_folding_smoke"
+    episode_limit: 8
+    output_root: "outputs"
+    dataset_root: "${oc.env:LEROBOT_FULL_FOLDING_ROOT,${oc.env:HF_HOME,${oc.env:HOME}/.cache/huggingface}/lerobot/full_folding}"
+
+  dataloader:
+    batch_size: 1
+    num_workers: 0
+    pin_memory: False
+    persistent_workers: False
+
+  val_dataloader:
+    batch_size: 1
+    num_workers: 0
+    pin_memory: False
+    persistent_workers: False
+
+  rollout_dataloader:
+    batch_size: 1
+    num_workers: 0
+    pin_memory: False
+    persistent_workers: False
+
+  train:
+    num_epochs: 1
+    log_every: 1
+    save_every: 5
+    val_portion: 0.25

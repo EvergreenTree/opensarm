@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 import random
+import pandas as pd
 
 
 def adapt_lerobot_batch_sarm(
@@ -65,7 +66,41 @@ def adapt_lerobot_batch_rewind(
 
 
 
-def get_valid_episodes(repo_id: str) -> List[int]:
+def resolve_lerobot_root(repo_id: str, root: str | None = None) -> Path:
+    if root:
+        return Path(root).expanduser()
+
+    candidates = []
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        candidates.extend([
+            Path(hf_home) / "lerobot" / repo_id,
+            Path(hf_home) / "lerobot" / repo_id.split("/")[-1],
+        ])
+
+    candidates.extend([
+        Path.home() / ".cache" / "huggingface" / "lerobot" / repo_id,
+        Path.home() / ".cache" / "huggingface" / "lerobot" / repo_id.split("/")[-1],
+    ])
+
+    for candidate in candidates:
+        if (candidate / "meta" / "info.json").exists() or (candidate / "data").exists():
+            return candidate
+    return candidates[0]
+
+
+def _get_valid_episodes_v3(root: Path) -> List[int]:
+    episodes_dir = root / "meta" / "episodes"
+    if not episodes_dir.exists():
+        return []
+    episodes = []
+    for path in sorted(episodes_dir.glob("*/*.parquet")):
+        df = pd.read_parquet(path, columns=["episode_index"])
+        episodes.extend(int(x) for x in df["episode_index"].tolist())
+    return sorted(episodes)
+
+
+def get_valid_episodes(repo_id: str, root: str | None = None) -> List[int]:
     """
     Collects valid episode indices under the lerobot cache for the given repo_id.
 
@@ -75,7 +110,12 @@ def get_valid_episodes(repo_id: str) -> List[int]:
     Returns:
         List[int]: Sorted list of valid episode indices (e.g., [0, 1, 5, 7, ...])
     """
-    base_path = Path.home() / ".cache" / "huggingface" / "lerobot" / repo_id / "data"
+    dataset_root = resolve_lerobot_root(repo_id, root)
+    v3_episodes = _get_valid_episodes_v3(dataset_root)
+    if v3_episodes:
+        return v3_episodes
+
+    base_path = dataset_root / "data"
     episode_pattern = re.compile(r"episode_(\d+)\.parquet")
 
     valid_episodes = []
@@ -115,4 +155,3 @@ def split_train_eval_episodes(valid_episodes: List[int], train_ratio: float = 0.
     eval_episodes = episodes[split_index:]
 
     return train_episodes, eval_episodes
-

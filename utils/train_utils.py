@@ -22,7 +22,42 @@ def save_ckpt(model, opt, ep, save_dir, input_name=None):
     )
 
 @torch.no_grad()
-def get_normalizer_from_calculated(path, device) -> "SingleFieldLinearNormalizer":
+def _normalizer_from_state_stats(state_stats, state_dim: int, device) -> "SingleFieldLinearNormalizer":
+    def to_tensor_slice(data):
+        return torch.tensor(data[:state_dim], dtype=torch.float32, device=device)
+
+    state_std = torch.clamp(to_tensor_slice(state_stats["std"]), min=1.0e-6)
+    state_mean = torch.tensor(state_stats["mean"][:state_dim], dtype=torch.float32, device=device)
+
+    return SingleFieldLinearNormalizer.create_manual(
+        scale=1.0 / state_std,
+        offset=-(state_mean / state_std),
+        input_stats_dict={
+            "min": torch.tensor(state_stats.get("q01", state_stats.get("min"))[:state_dim], dtype=torch.float32, device=device),
+            "max": torch.tensor(state_stats.get("q99", state_stats.get("max"))[:state_dim], dtype=torch.float32, device=device),
+            "mean": state_mean,
+            "std": state_std,
+        },
+    )
+
+
+@torch.no_grad()
+def get_normalizer_from_lerobot_stats(root, state_key: str, state_dim: int, device) -> "SingleFieldLinearNormalizer":
+    stats_path = Path(root) / "meta" / "stats.json"
+    if not stats_path.exists():
+        stats_path = Path(root) / "stats.json"
+    if not stats_path.exists():
+        raise FileNotFoundError(f"Could not locate LeRobot stats file under {root}")
+
+    with open(stats_path, "r") as f:
+        stats = json.load(f)
+    if state_key not in stats:
+        raise KeyError(f"State key '{state_key}' not found in {stats_path}. Available keys: {list(stats)}")
+    return _normalizer_from_state_stats(stats[state_key], state_dim, device)
+
+
+@torch.no_grad()
+def get_normalizer_from_calculated(path, device, state_dim: int = 14) -> "SingleFieldLinearNormalizer":
     """
     Load norm stats from a JSON file. Accepts absolute or relative paths.
     Relative paths are resolved robustly even when Hydra changes the CWD.
@@ -73,24 +108,8 @@ def get_normalizer_from_calculated(path, device) -> "SingleFieldLinearNormalizer
     with open(abs_path, "r") as f:
         norm_data = json.load(f)["norm_stats"]
 
-    def to_tensor_slice(data, k: int = 14):  # both arms
-        return torch.tensor(data[:k], dtype=torch.float32, device=device)
-
     state_stats = norm_data["state"]
-    state_std = to_tensor_slice(state_stats["std"])
-    state_mean = to_tensor_slice(state_stats["mean"])
-
-    state_normalizer = SingleFieldLinearNormalizer.create_manual(
-        scale=1.0 / state_std,
-        offset=-(state_mean / state_std),
-        input_stats_dict={
-            "min": to_tensor_slice(state_stats["q01"]),
-            "max": to_tensor_slice(state_stats["q99"]),
-            "mean": state_mean,
-            "std": state_std,
-        },
-    )
-    return state_normalizer
+    return _normalizer_from_state_stats(state_stats, state_dim, device)
 
 
 def plot_episode_result(ep_index, ep_result, gt_ep_result, x_offset, rollout_save_dir, frame_gap=None, ep_conf=None, ep_smoothed=None):

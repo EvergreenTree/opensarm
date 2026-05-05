@@ -16,6 +16,7 @@ from lerobot.common.datasets.rm_lerobot_dataset import FrameGapLeRobotDataset
 from utils.data_utils import get_valid_episodes, split_train_eval_episodes, adapt_lerobot_batch_rewind
 from utils.train_utils import set_seed, save_ckpt, get_normalizer_from_calculated, plot_episode_result, plot_episode_result_raw_data
 from utils.raw_data_utils import get_frame_num, get_frame_data_fast, get_traj_data, normalize_dense
+from utils.device_utils import resolve_torch_device
 from models.rewind_reward_model import RewardTransformer
 from models.clip_encoder import FrozenCLIPEncoder
 from utils.make_demo_video import produce_video
@@ -28,7 +29,7 @@ os.environ["WANDB_IGNORE_GLOBS"] = "**/rollout/**"
 class ReWiNDWorkspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        self.device = torch.device(cfg.general.device if torch.cuda.is_available() else "cpu")
+        self.device = resolve_torch_device(cfg.general.device)
         print(f"[Init] Using device: {self.device}")
         set_seed(cfg.general.seed)
         self.camera_names = cfg.general.camera_names

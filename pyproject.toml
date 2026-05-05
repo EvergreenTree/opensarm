@@ -33,6 +33,8 @@ dependencies = [
   "ml_collections",
   "tyro",
   "datasets>=2.0.0",
+  "huggingface_hub[hf_transfer]",
+  "pandas",
   "typing-extensions",
   "filelock",
 ]

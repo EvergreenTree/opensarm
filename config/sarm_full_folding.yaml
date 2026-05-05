@@ -1,0 +1,87 @@
+_target_: workspace.sarm_ws.SARMWorkspace
+
+cfg:
+  general:
+    project_name: "reward_sarm"
+    task_name: "full_folding"
+    dataset_format: "lerobot_v3_full_folding"
+    repo_id_sparse: "lerobot/full_folding"
+    repo_id_dense: "lerobot/full_folding"
+    dataset_root: "/mnt/sarm-data/hf/lerobot/full_folding"
+    state_key: "observation.state"
+    progress_key: "progress_sparse"
+    state_norm_path: "dataset_meta"
+    camera_names: [observation.images.base]
+    seed: 42
+    device: "cuda"
+    output_root: "/mnt/sarm-data/outputs"
+
+  dataloader:
+    batch_size: 8
+    num_workers: 4
+    shuffle: True
+    pin_memory: True
+    persistent_workers: True
+
+  val_dataloader:
+    batch_size: 8
+    num_workers: 4
+    shuffle: False
+    pin_memory: True
+    persistent_workers: True
+
+  rollout_dataloader:
+    batch_size: 1
+    num_workers: 2
+    shuffle: True
+    pin_memory: True
+    persistent_workers: True
+
+  encoders:
+    vision_ckpt: "openai/clip-vit-base-patch32"
+    text_ckpt: "openai/clip-vit-base-patch32"
+
+  model:
+    d_model: 768
+    n_layers: 8
+    n_heads: 12
+    dropout: 0.1
+    n_obs_steps: 8
+    max_rewind_steps: 4
+    frame_gap: 30
+    state_dim: 16
+    no_state: False
+    single_stage_progress: True
+    resume_training: False
+    model_path: ""
+    num_classes_sparse: 1
+    sparse_annotation_list: ["fold clothing"]
+    num_classes_dense: 1
+    dense_annotation_list: ["fold clothing"]
+
+  optim:
+    lr: 5e-5
+    weight_decay: 5.0e-3
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+    warmup_steps: 1000
+    total_steps: 100_000
+
+  train:
+    num_epochs: 2
+    grad_clip: 1.0
+    log_every: 50
+    eval_every: 1
+    save_every: 5_000
+    val_portion: 0.1
+
+  eval:
+    eval_frame_gap: 10
+    ckpt_path: "/mnt/sarm-data/outputs/reward_sarm/full_folding/checkpoints"
+    stage_model: "stage_best.pt"
+    subtask_model: "subtask_best.pt"
+    model_type: "sparse"
+    dataset_type: "sparse"
+    run_times: 60
+    raw_data_dir: ""
+    raw_data_run_times: 60

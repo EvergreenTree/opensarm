@@ -12,10 +12,11 @@ from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
 from tqdm import tqdm
 import wandb
 
-from lerobot.common.datasets.rm_lerobot_dataset import FrameGapLeRobotDataset 
+from lerobot.common.datasets.rm_lerobot_dataset import FrameGapLeRobotDataset, FullFoldingSarmDataset
 from utils.data_utils import get_valid_episodes, split_train_eval_episodes, adapt_lerobot_batch_sarm
-from utils.train_utils import set_seed, save_ckpt, get_normalizer_from_calculated, plot_episode_result_raw_data, plot_episode_result
+from utils.train_utils import set_seed, save_ckpt, get_normalizer_from_calculated, get_normalizer_from_lerobot_stats, plot_episode_result_raw_data, plot_episode_result
 from utils.raw_data_utils import get_frame_num, get_frame_data_fast, get_traj_data, normalize_sparse, normalize_dense
+from utils.device_utils import resolve_torch_device
 from models.subtask_estimator import SubtaskTransformer
 from models.stage_estimator import StageTransformer
 from models.clip_encoder import FrozenCLIPEncoder
@@ -36,13 +37,41 @@ def infinite_loader(dl):
 class SARMWorkspace:
     def __init__(self, cfg):
         self.cfg = cfg
-        self.device = torch.device(cfg.general.device if torch.cuda.is_available() else "cpu")
+        self.device = resolve_torch_device(cfg.general.device)
         print(f"[Init] Using device: {self.device}")
         set_seed(cfg.general.seed)
         self.camera_names = cfg.general.camera_names
-        self.save_dir = Path(f'{cfg.general.project_name}/{cfg.general.task_name}')
+        output_root = Path(cfg.general.get("output_root", "."))
+        self.save_dir = output_root / f'{cfg.general.project_name}/{cfg.general.task_name}'
         self.save_dir.mkdir(parents=True, exist_ok=True)
         print(f"[Init] Logging & ckpts to: {self.save_dir}")
+
+    def _make_dataset(self, repo_id, episodes, annotation_list, video_eval=False):
+        cfg = self.cfg
+        dataset_format = cfg.general.get("dataset_format", "opensarm_v2")
+        if dataset_format == "lerobot_v3_full_folding":
+            return FullFoldingSarmDataset(
+                repo_id=repo_id,
+                root=cfg.general.get("dataset_root", None),
+                episodes=episodes,
+                n_obs_steps=cfg.model.n_obs_steps,
+                frame_gap=cfg.model.frame_gap,
+                max_rewind_steps=cfg.model.max_rewind_steps,
+                image_names=cfg.general.camera_names,
+                state_key=cfg.general.get("state_key", "observation.state"),
+                progress_key=cfg.general.get("progress_key", "progress_sparse"),
+                task_name=cfg.general.task_name,
+                episode_limit=cfg.general.get("episode_limit", None),
+            )
+        return FrameGapLeRobotDataset(repo_id=repo_id,
+                                      episodes=episodes,
+                                      n_obs_steps=cfg.model.n_obs_steps,
+                                      frame_gap=cfg.model.frame_gap,
+                                      max_rewind_steps=cfg.model.max_rewind_steps,
+                                      image_names=cfg.general.camera_names,
+                                      annotation_list=annotation_list,
+                                      task_name=cfg.general.task_name,
+                                      video_eval=video_eval)
 
     def gen_stage_emb(self, num_classes, trg):
         """
@@ -68,46 +97,16 @@ class SARMWorkspace:
         )
 
         # --- data ---
-        valid_episodes_sparse = get_valid_episodes(cfg.general.repo_id_sparse)
+        dataset_root = cfg.general.get("dataset_root", None)
+        valid_episodes_sparse = get_valid_episodes(cfg.general.repo_id_sparse, root=dataset_root)
         train_eps_sparse, val_eps_sparse = split_train_eval_episodes(valid_episodes_sparse, 1 - cfg.train.val_portion, seed=cfg.general.seed)
-        valid_episodes_dense = get_valid_episodes(cfg.general.repo_id_dense)
+        valid_episodes_dense = get_valid_episodes(cfg.general.repo_id_dense, root=dataset_root)
         train_eps_dense, val_eps_dense = split_train_eval_episodes(valid_episodes_dense, 1 - cfg.train.val_portion, seed=cfg.general.seed)
 
-        dataset_train_sparse = FrameGapLeRobotDataset(repo_id=cfg.general.repo_id_sparse, 
-                                               episodes=train_eps_sparse, 
-                                               n_obs_steps=cfg.model.n_obs_steps, 
-                                               frame_gap=cfg.model.frame_gap,
-                                               max_rewind_steps=cfg.model.max_rewind_steps,
-                                               image_names=cfg.general.camera_names,
-                                               annotation_list=cfg.model.sparse_annotation_list,
-                                               task_name=cfg.general.task_name)
-
-        dataset_train_dense = FrameGapLeRobotDataset(repo_id=cfg.general.repo_id_dense, 
-                                               episodes=train_eps_dense, 
-                                               n_obs_steps=cfg.model.n_obs_steps, 
-                                               frame_gap=cfg.model.frame_gap,
-                                               max_rewind_steps=cfg.model.max_rewind_steps,
-                                               image_names=cfg.general.camera_names,
-                                               annotation_list=cfg.model.dense_annotation_list,
-                                               task_name=cfg.general.task_name)
-
-        dataset_val_sparse = FrameGapLeRobotDataset(repo_id=cfg.general.repo_id_sparse, 
-                                               episodes=val_eps_sparse, 
-                                               n_obs_steps=cfg.model.n_obs_steps, 
-                                               frame_gap=cfg.model.frame_gap,
-                                               max_rewind_steps=cfg.model.max_rewind_steps,
-                                               image_names=cfg.general.camera_names,
-                                               annotation_list=cfg.model.sparse_annotation_list,
-                                               task_name=cfg.general.task_name)
-        
-        dataset_val_dense = FrameGapLeRobotDataset(repo_id=cfg.general.repo_id_dense, 
-                                               episodes=val_eps_dense, 
-                                               n_obs_steps=cfg.model.n_obs_steps, 
-                                               frame_gap=cfg.model.frame_gap,
-                                               max_rewind_steps=cfg.model.max_rewind_steps,
-                                               image_names=cfg.general.camera_names,
-                                               annotation_list=cfg.model.dense_annotation_list,
-                                               task_name=cfg.general.task_name)
+        dataset_train_sparse = self._make_dataset(cfg.general.repo_id_sparse, train_eps_sparse, cfg.model.sparse_annotation_list)
+        dataset_train_dense = self._make_dataset(cfg.general.repo_id_dense, train_eps_dense, cfg.model.dense_annotation_list)
+        dataset_val_sparse = self._make_dataset(cfg.general.repo_id_sparse, val_eps_sparse, cfg.model.sparse_annotation_list)
+        dataset_val_dense = self._make_dataset(cfg.general.repo_id_dense, val_eps_dense, cfg.model.dense_annotation_list)
 
         dataloader_train_sparse = torch.utils.data.DataLoader(dataset_train_sparse, **cfg.dataloader)
         dataloader_val_sparse   = torch.utils.data.DataLoader(dataset_val_sparse, **cfg.val_dataloader)
@@ -115,7 +114,15 @@ class SARMWorkspace:
         dataloader_train_dense = torch.utils.data.DataLoader(dataset_train_dense, **cfg.dataloader)
         dataloader_val_dense   = torch.utils.data.DataLoader(dataset_val_dense, **cfg.val_dataloader)
         dataloader_rollout_dense = torch.utils.data.DataLoader(dataset_val_dense, **cfg.rollout_dataloader)
-        state_normalizer = get_normalizer_from_calculated(cfg.general.state_norm_path, self.device)
+        if str(cfg.general.state_norm_path) == "dataset_meta":
+            state_normalizer = get_normalizer_from_lerobot_stats(
+                dataset_train_sparse.root,
+                cfg.general.get("state_key", "observation.state"),
+                cfg.model.state_dim,
+                self.device,
+            )
+        else:
+            state_normalizer = get_normalizer_from_calculated(cfg.general.state_norm_path, self.device, cfg.model.state_dim)
 
         # --- encoders ---
         # CLIP
@@ -221,7 +228,11 @@ class SARMWorkspace:
             trg = batch["targets"].to(self.device)
             lens = batch["lengths"].to(self.device)
             state = batch["state"].to(self.device)
-            gt_stage, gt_sub_reward = torch.floor(trg).to(torch.long), torch.remainder(trg, 1.0)
+            if cfg.model.get("single_stage_progress", False):
+                gt_stage = torch.zeros_like(trg, dtype=torch.long)
+                gt_sub_reward = trg.clamp(0.0, 1.0)
+            else:
+                gt_stage, gt_sub_reward = torch.floor(trg).to(torch.long), torch.remainder(trg, 1.0)
 
             with torch.no_grad():
                 state = state_normalizer.normalize(state)
@@ -292,7 +303,11 @@ class SARMWorkspace:
                 trg = batch["targets"].to(self.device)
                 lens = batch["lengths"].to(self.device)
                 state = batch["state"].to(self.device)
-                gt_stage, gt_sub_reward = torch.floor(trg).to(torch.long), torch.remainder(trg, 1.0)
+                if cfg.model.get("single_stage_progress", False):
+                    gt_stage = torch.zeros_like(trg, dtype=torch.long)
+                    gt_sub_reward = trg.clamp(0.0, 1.0)
+                else:
+                    gt_stage, gt_sub_reward = torch.floor(trg).to(torch.long), torch.remainder(trg, 1.0)
                 state = state_normalizer.normalize(state)
 
                 # VLM encoding
