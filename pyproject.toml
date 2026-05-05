@@ -35,6 +35,7 @@ dependencies = [
   "datasets>=2.0.0",
   "huggingface_hub[hf_transfer]",
   "pandas",
+  "setuptools<81",
   "typing-extensions",
   "filelock",
 ]
