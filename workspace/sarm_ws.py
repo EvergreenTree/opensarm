@@ -14,7 +14,7 @@ import wandb
 
 from lerobot.common.datasets.rm_lerobot_dataset import FrameGapLeRobotDataset, FullFoldingSarmDataset
 from utils.data_utils import get_valid_episodes, split_train_eval_episodes, adapt_lerobot_batch_sarm
-from utils.train_utils import set_seed, save_ckpt, get_normalizer_from_calculated, get_normalizer_from_lerobot_stats, plot_episode_result_raw_data, plot_episode_result
+from utils.train_utils import set_seed, save_ckpt, get_normalizer_from_calculated, get_normalizer_from_lerobot_stats, get_normalizer_from_state_stats, plot_episode_result_raw_data, plot_episode_result
 from utils.raw_data_utils import get_frame_num, get_frame_data_fast, get_traj_data, normalize_sparse, normalize_dense
 from utils.device_utils import resolve_torch_device
 from models.subtask_estimator import SubtaskTransformer
@@ -115,12 +115,15 @@ class SARMWorkspace:
         dataloader_val_dense   = torch.utils.data.DataLoader(dataset_val_dense, **cfg.val_dataloader)
         dataloader_rollout_dense = torch.utils.data.DataLoader(dataset_val_dense, **cfg.rollout_dataloader)
         if str(cfg.general.state_norm_path) == "dataset_meta":
-            state_normalizer = get_normalizer_from_lerobot_stats(
-                dataset_train_sparse.root,
-                cfg.general.get("state_key", "observation.state"),
-                cfg.model.state_dim,
-                self.device,
-            )
+            if hasattr(dataset_train_sparse, "state_stats"):
+                state_normalizer = get_normalizer_from_state_stats(dataset_train_sparse.state_stats(), cfg.model.state_dim, self.device)
+            else:
+                state_normalizer = get_normalizer_from_lerobot_stats(
+                    dataset_train_sparse.root,
+                    cfg.general.get("state_key", "observation.state"),
+                    cfg.model.state_dim,
+                    self.device,
+                )
         else:
             state_normalizer = get_normalizer_from_calculated(cfg.general.state_norm_path, self.device, cfg.model.state_dim)
 

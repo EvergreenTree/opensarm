@@ -109,6 +109,29 @@ class FullFoldingSarmDataset(torch.utils.data.Dataset):
             indices.extend(range(start, end))
         return indices
 
+    def state_stats(self) -> dict[str, list[float]]:
+        prefix = f"stats/{self.state_key}"
+        count = np.asarray([float(np.asarray(x).reshape(-1)[0]) for x in self.episode_table[f"{prefix}/count"]])
+        mean = np.stack(self.episode_table[f"{prefix}/mean"].to_numpy()).astype(np.float64)
+        std = np.stack(self.episode_table[f"{prefix}/std"].to_numpy()).astype(np.float64)
+        total = max(float(count.sum()), 1.0)
+
+        weighted_mean = (mean * count[:, None]).sum(axis=0) / total
+        second_moment = ((std ** 2 + mean ** 2) * count[:, None]).sum(axis=0) / total
+        weighted_std = np.sqrt(np.maximum(second_moment - weighted_mean ** 2, 1.0e-12))
+
+        stats = {
+            "mean": weighted_mean.tolist(),
+            "std": weighted_std.tolist(),
+            "min": np.stack(self.episode_table[f"{prefix}/min"].to_numpy()).min(axis=0).tolist(),
+            "max": np.stack(self.episode_table[f"{prefix}/max"].to_numpy()).max(axis=0).tolist(),
+        }
+        if f"{prefix}/q01" in self.episode_table:
+            stats["q01"] = np.stack(self.episode_table[f"{prefix}/q01"].to_numpy()).min(axis=0).tolist()
+        if f"{prefix}/q99" in self.episode_table:
+            stats["q99"] = np.stack(self.episode_table[f"{prefix}/q99"].to_numpy()).max(axis=0).tolist()
+        return stats
+
     def __len__(self):
         return len(self.sample_indices)
 
@@ -455,4 +478,3 @@ class FrameGapLeRobotDataset(LeRobotDataset):
             rewind_frames = torch.cat([rewind_frames, pad], dim=0)
 
         return rewind_step, rewind_frames
-
