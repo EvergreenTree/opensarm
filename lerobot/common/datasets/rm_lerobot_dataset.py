@@ -32,6 +32,7 @@ class FullFoldingSarmDataset(torch.utils.data.Dataset):
         tolerance_s: float = 1e-4,
         video_backend: str | None = None,
         episode_limit: int | None = None,
+        image_embedding_cache: str | Path | None = None,
     ):
         self.repo_id = repo_id
         self.root = resolve_lerobot_root(repo_id, str(root) if root is not None else None)
@@ -45,6 +46,8 @@ class FullFoldingSarmDataset(torch.utils.data.Dataset):
         self.task_name = task_name
         self.tolerance_s = tolerance_s
         self.video_backend = video_backend or "pyav"
+        self.image_embedding_cache_path = Path(image_embedding_cache) if image_embedding_cache else None
+        self.image_embedding_cache = None
 
         with open(self.root / "meta" / "info.json", "r") as f:
             self.info = json.load(f)
@@ -78,6 +81,16 @@ class FullFoldingSarmDataset(torch.utils.data.Dataset):
         self.hf_dataset = Dataset.from_parquet([str(p) for p in paths])
 
         self.progress = self._load_progress()
+        if self.image_embedding_cache_path is not None:
+            self.image_embedding_cache = np.load(self.image_embedding_cache_path, mmap_mode="r")
+            if self.image_embedding_cache.ndim != 3:
+                raise ValueError(
+                    f"Expected image embedding cache with shape (frames, cameras, dim), got {self.image_embedding_cache.shape}"
+                )
+            if self.image_embedding_cache.shape[1] != len(self.image_names):
+                raise ValueError(
+                    f"Embedding cache has {self.image_embedding_cache.shape[1]} cameras, expected {len(self.image_names)}"
+                )
         self.sample_indices = self._build_sample_indices()
         if len(self.sample_indices) == 0:
             raise ValueError("Selected episodes contain no trainable frame indices.")
@@ -199,27 +212,50 @@ class FullFoldingSarmDataset(torch.utils.data.Dataset):
         rewind_flag = self.max_rewind_steps > 0 and torch.rand(1).item() < 0.8 and abs_idx > ep_start + self.n_obs_steps * self.frame_gap
         rewind_step = 0
         rewind_indices = []
-        for key in self.image_names:
-            frames = self._decode_video(ep, key, obs_ts_range)
+        if self.image_embedding_cache is not None:
             if rewind_flag:
                 max_valid_step = min(self.max_rewind_steps, max(1, (abs_idx - ep_start) // max(1, self.frame_gap)))
                 rewind_step = int(torch.randint(1, max_valid_step + 1, (1,)).item())
                 rewind_indices = list(range(abs_idx - rewind_step * self.frame_gap, abs_idx, self.frame_gap))
                 rewind_indices = [max(ep_start, min(i, ep_end)) for i in rewind_indices]
-                rewind_rows = self._rows(rewind_indices)
-                rewind_ts = [float(ts) for ts in rewind_rows["timestamp"]]
-                rewind_frames = torch.flip(self._decode_video(ep, key, rewind_ts), dims=[0])
-                if rewind_frames.ndim == 3:
-                    rewind_frames = rewind_frames.unsqueeze(0)
+
+            emb = torch.from_numpy(np.array(self.image_embedding_cache[obs_indices], dtype=np.float32, copy=True))
+            if rewind_flag and rewind_indices:
+                rewind_emb = torch.flip(
+                    torch.from_numpy(np.array(self.image_embedding_cache[rewind_indices], dtype=np.float32, copy=True)),
+                    dims=[0],
+                )
                 pad_count = self.max_rewind_steps - rewind_step
                 if pad_count > 0:
-                    pad = torch.zeros((pad_count, *rewind_frames.shape[1:]), dtype=rewind_frames.dtype)
-                    rewind_frames = torch.cat([rewind_frames, pad], dim=0)
-                frames = torch.cat([frames, rewind_frames], dim=0)
+                    pad = torch.zeros((pad_count, *rewind_emb.shape[1:]), dtype=rewind_emb.dtype)
+                    rewind_emb = torch.cat([rewind_emb, pad], dim=0)
+                emb = torch.cat([emb, rewind_emb], dim=0)
             else:
-                padding_frames = torch.zeros((self.max_rewind_steps, *frames.shape[1:]), dtype=frames.dtype)
-                frames = torch.cat([frames, padding_frames], dim=0)
-            seq_item[key] = frames
+                padding = torch.zeros((self.max_rewind_steps, *emb.shape[1:]), dtype=emb.dtype)
+                emb = torch.cat([emb, padding], dim=0)
+            seq_item["image_embeddings"] = emb.permute(1, 0, 2).contiguous()
+        else:
+            for key in self.image_names:
+                frames = self._decode_video(ep, key, obs_ts_range)
+                if rewind_flag:
+                    max_valid_step = min(self.max_rewind_steps, max(1, (abs_idx - ep_start) // max(1, self.frame_gap)))
+                    rewind_step = int(torch.randint(1, max_valid_step + 1, (1,)).item())
+                    rewind_indices = list(range(abs_idx - rewind_step * self.frame_gap, abs_idx, self.frame_gap))
+                    rewind_indices = [max(ep_start, min(i, ep_end)) for i in rewind_indices]
+                    rewind_rows = self._rows(rewind_indices)
+                    rewind_ts = [float(ts) for ts in rewind_rows["timestamp"]]
+                    rewind_frames = torch.flip(self._decode_video(ep, key, rewind_ts), dims=[0])
+                    if rewind_frames.ndim == 3:
+                        rewind_frames = rewind_frames.unsqueeze(0)
+                    pad_count = self.max_rewind_steps - rewind_step
+                    if pad_count > 0:
+                        pad = torch.zeros((pad_count, *rewind_frames.shape[1:]), dtype=rewind_frames.dtype)
+                        rewind_frames = torch.cat([rewind_frames, pad], dim=0)
+                    frames = torch.cat([frames, rewind_frames], dim=0)
+                else:
+                    padding_frames = torch.zeros((self.max_rewind_steps, *frames.shape[1:]), dtype=frames.dtype)
+                    frames = torch.cat([frames, padding_frames], dim=0)
+                seq_item[key] = frames
 
         targets = torch.zeros(1 + self.n_obs_steps + self.max_rewind_steps, dtype=torch.float32)
         progress_values = torch.tensor(self.progress[np.asarray(obs_indices, dtype=np.int64)], dtype=torch.float32)

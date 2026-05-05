@@ -11,6 +11,7 @@ cfg:
     state_key: "observation.state"
     progress_key: "progress_sparse"
     video_backend: "pyav"
+    image_embedding_cache: null
     state_norm_path: "dataset_meta"
     camera_names: [observation.images.base]
     seed: 42
@@ -19,7 +20,7 @@ cfg:
 
   dataloader:
     batch_size: 8
-    num_workers: 4
+    num_workers: 8
     shuffle: True
     pin_memory: True
     persistent_workers: True

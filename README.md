@@ -1,146 +1,136 @@
-<div align="center">
+# OpenSARM Full Folding Training Fork
 
+This fork adapts [xdofai/opensarm](https://github.com/xdofai/opensarm) for full-dataset SARM reward-model training on [`lerobot/full_folding`](https://huggingface.co/datasets/lerobot/full_folding).
 
-# SARM: Stage-Aware Reward Modeling for Long Horizon Robot Manipulation
+The upstream project README, paper links, citation, and general SARM usage notes live in the original repository:
 
+- Original README: https://github.com/xdofai/opensarm/blob/main/README.md
+- Original repository: https://github.com/xdofai/opensarm
 
-[Project Page](https://qianzhong-chen.github.io/sarm.github.io/)  | [Arxiv](https://arxiv.org/abs/2509.25358)
+## What This Fork Adds
 
-</div>
+- A LeRobot v3 adapter for `lerobot/full_folding`.
+- Mapping from `observation.state` to SARM state tensors.
+- Base camera support through `observation.images.base`.
+- `sarm_progress.parquet` targets using `progress_sparse`.
+- CUDA/MPS/CPU device selection.
+- Full-run configuration in `config/sarm_full_folding.yaml`.
+- A frozen CLIP image-embedding cache path to avoid decoding MP4 video during every training step.
+- A precompute script for the CLIP cache at `scripts/precompute_full_folding_clip_embeddings.py`.
 
-<div align="center">
-  <img src="assets/sarm.png" style="width:80%" />
-</div>
+## Expected Dataset Layout
 
+Download or place `lerobot/full_folding` at:
 
-This repository provides training and evaluation scripts for **SARM** on both the LeRobot dataset and raw robot trajectories.
-
-
-## Configurations & Installation
-
-We recommend using [uv](https://github.com/astral-sh/uv) for dependency management.  
-
-### 1. Clone the repository:
 ```bash
-git clone https://github.com/xdofai/opensarm
+/mnt/sarm-data/hf/lerobot/full_folding
 ```
 
-### 2. Install `uv`
+The adapter expects the dataset root to contain:
+
 ```bash
-pip install uv
+data/
+meta/
+videos/
+sarm_progress.parquet
 ```
 
-### 3. Sync environment
+The default config uses:
+
+```yaml
+cfg:
+  general:
+    dataset_format: lerobot_v3_full_folding
+    dataset_root: /mnt/sarm-data/hf/lerobot/full_folding
+    state_key: observation.state
+    progress_key: progress_sparse
+    camera_names: [observation.images.base]
+```
+
+## Install
+
+Use `uv` from the repository root:
+
 ```bash
 uv sync
 ```
 
-### 4. Activate environment
-```bash
-source .venv/bin/activate
-```
-
-
-## Reward Model Training
+For offline or server training, the current deployment uses:
 
 ```bash
-python train.py --config-name sarm
+export HF_HOME=/mnt/sarm-data/hf-home
+export HF_HUB_ENABLE_HF_TRANSFER=1
+export WANDB_MODE=offline
+export UV_CACHE_DIR=/mnt/sarm-data/uv-cache
+export UV_LINK_MODE=copy
 ```
 
+## Precompute Frozen CLIP Image Embeddings
 
-## Reward Model Evaluation
+The full dataset is video-decode bound if training reads random MP4 frames directly. Since the CLIP image encoder is frozen, precompute image embeddings once:
 
-### Evaluate on LeRobot dataset's validation set
 ```bash
-python eval.py --config-name sarm
+uv run python scripts/precompute_full_folding_clip_embeddings.py \
+  --root /mnt/sarm-data/hf/lerobot/full_folding \
+  --output /mnt/sarm-data/hf/lerobot/full_folding/cache/clip_image_embeddings.npy \
+  --done-output /mnt/sarm-data/hf/lerobot/full_folding/cache/clip_image_embeddings.done.npy
 ```
 
-### Evaluate on raw robot trajectory
+The script writes a resumable `.npy` memmap plus a `.done.npy` progress mask. The default cache is float16 with shape:
+
 ```bash
-python eval.py --config-name sarm --mode raw_data
+(num_frames, num_cameras, 512)
 ```
 
----
+## Train With The Cache
+
+After the cache exists, start full training:
+
+```bash
+uv run python train.py --config-name sarm_full_folding \
+  cfg.general.image_embedding_cache=/mnt/sarm-data/hf/lerobot/full_folding/cache/clip_image_embeddings.npy
+```
+
+To run in tmux:
+
+```bash
+tmux new -d -s sarm_full_folding '
+  cd /mnt/sarm-data/src/opensarm &&
+  export HF_HOME=/mnt/sarm-data/hf-home &&
+  export HF_HUB_ENABLE_HF_TRANSFER=1 &&
+  export WANDB_MODE=offline &&
+  export UV_CACHE_DIR=/mnt/sarm-data/uv-cache &&
+  export UV_LINK_MODE=copy &&
+  uv run python train.py --config-name sarm_full_folding \
+    cfg.general.image_embedding_cache=/mnt/sarm-data/hf/lerobot/full_folding/cache/clip_image_embeddings.npy \
+    2>&1 | tee /mnt/sarm-data/logs/sarm_full_folding.log
+'
+```
+
+## Smoke Checks
+
+Compile the touched Python modules:
+
+```bash
+uv run python -m py_compile \
+  train.py \
+  workspace/sarm_ws.py \
+  utils/data_utils.py \
+  lerobot/common/datasets/rm_lerobot_dataset.py \
+  scripts/precompute_full_folding_clip_embeddings.py
+```
+
+Precompute a one-episode cache smoke:
+
+```bash
+uv run python scripts/precompute_full_folding_clip_embeddings.py \
+  --episode-limit 1 \
+  --output /mnt/sarm-data/hf/lerobot/full_folding/cache/test_clip_embeddings.npy \
+  --done-output /mnt/sarm-data/hf/lerobot/full_folding/cache/test_clip_embeddings.done.npy
+```
 
 ## Notes
-- Replace `sarm` with `rewind` in the commands above if you want to run the baseline method.  
-- All configs are stored under the `config/` directory.
 
-## Dataset Clarification
-### We use a modified [LeRobotDataset](https://huggingface.co/docs/lerobot/en/lerobot-dataset-v3)  structure:
-```bash
-A typical LeRobotDataset looks like this from its root path:
-        .
-        ├── data
-        │   ├── chunk-000
-        │   │   ├── episode_000000.parquet
-        │   │   ├── episode_000001.parquet
-        │   │   ├── episode_000002.parquet
-        │   │   └── ...
-        │   ├── chunk-001
-        │   │   ├── episode_001000.parquet
-        │   │   ├── episode_001001.parquet
-        │   │   ├── episode_001002.parquet
-        │   │   └── ...
-        │   └── ...
-        ├── meta
-        │   ├── episodes.jsonl
-        │   ├── info.json
-        │   ├── stats.json
-        │   └── tasks.jsonl
-        └── videos
-            ├── chunk-000
-            │   ├── left_camera-images-rgb
-            │   │   ├── episode_000000.mp4
-            │   │   ├── episode_000001.mp4
-            │   │   ├── episode_000002.mp4
-            │   │   └── ...
-            |   ├── right_camera-images-rgb
-            │   │   ├── episode_000000.mp4
-            │   │   ├── episode_000001.mp4
-            │   │   ├── episode_000002.mp4
-            │   │   └── ...
-            |   ├── top_camera-images-rgb
-            │   │   ├── episode_000000.mp4
-            │   │   ├── episode_000001.mp4
-            │   │   ├── episode_000002.mp4
-            │   │   └── ...
-            ├── chunk-001
-            └── ...
-```
-### Parquet schema (per timestep)
-
-Each `episode_XXXXXX.parquet` stores a time-series trajectory.  
-**Each row corresponds to one timestep** and contains the following columns:
-
-| Column          | Type            | Shape | Dtype    | Description |
-|----------------|-----------------|-------|----------|-------------|
-| `state`        | `np.ndarray`    | (state_dim,) | float64  | Robot state vector at time *t*. |
-| `actions`      | `np.ndarray`    | (act_dim,) | float64  | Action vector applied at time *t*. |
-| `reward`       | `np.ndarray`    | (1,)  | float32  | Scalar **progress** at time *t*. |
-| `timestamp`    | `np.ndarray`    | (1,)  | float64  | Timestamp (seconds). |
-| `frame_index`  | `np.ndarray`    | (1,)  | int64    | Frame id in the video stream. |
-| `episode_index`| `np.ndarray`    | (1,)  | int64    | Episode id (redundant but convenient for joins). |
-| `index`        | `np.ndarray`    | (1,)  | int64    | Global step index (or row index). |
-| `task_index`   | `np.ndarray`    | (1,)  | int64    | Task id (maps to `meta/tasks.jsonl`). |
-
-**Note:** Despite its name, `reward` stores the absolute task progress (value) rather than a reinforcement learning reward.
-
-
-## Acknowledgements
-- The repository structure is adapted from [diffusion_policy](https://github.com/real-stanford/diffusion_policy).
-- The dataset format follows the [LeRobotDataset](https://huggingface.co/docs/lerobot/en/lerobot-dataset-v3) specification.
-- The *ReWiND* model included in this repository is our reproduction from the [paper](https://arxiv.org/abs/2505.10911); please refer to the official [**ReWiND**](https://github.com/rewind-reward/ReWiND) repository for the original implementation.
-
-
-## Citation
-
-If you find our paper or code is useful, please consider citing:
-```kvk
-@article{chen2025sarm,
-  title={SARM: Stage-Aware Reward Modeling for Long Horizon Robot Manipulation},
-  author={Chen, Qianzhong and Yu, Justin and Schwager, Mac and Abbeel, Pieter and Shentu, Yide and Wu, Philipp},
-  journal={arXiv preprint arXiv:2509.25358},
-  year={2025}
-}
-```
+- The cache is intentionally not committed.
+- The first full run was bottlenecked by random MP4 seeks. This fork keeps the direct video path available, but the cached embedding path is the intended training path for full `lerobot/full_folding`.
+- Extra GPUs will not speed up the current training loop unless distributed training is added. Extra CPU can help decode/precompute, but the biggest win is avoiding repeated video decode during training.

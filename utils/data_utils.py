@@ -29,8 +29,11 @@ def adapt_lerobot_batch_sarm(
         "frame_relative_indices": maybe_unsqueeze(batch["frame_relative_indices"]),
     }
 
-    for cam_name in camera_names:
-        result["image_frames"][cam_name] = maybe_unsqueeze(batch[cam_name])
+    if "image_embeddings" in batch:
+        result["image_embeddings"] = maybe_unsqueeze(batch["image_embeddings"])
+    else:
+        for cam_name in camera_names:
+            result["image_frames"][cam_name] = maybe_unsqueeze(batch[cam_name])
 
     return result
 

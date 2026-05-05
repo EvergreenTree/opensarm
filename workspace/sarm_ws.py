@@ -63,6 +63,7 @@ class SARMWorkspace:
                 task_name=cfg.general.task_name,
                 video_backend=cfg.general.get("video_backend", "pyav"),
                 episode_limit=cfg.general.get("episode_limit", None),
+                image_embedding_cache=cfg.general.get("image_embedding_cache", None),
             )
         return FrameGapLeRobotDataset(repo_id=repo_id,
                                       episodes=episodes,
@@ -226,11 +227,16 @@ class SARMWorkspace:
         )
 
         def train_step(batch, anno_type):
-            B, T = batch["image_frames"][self.camera_names[0]].shape[:2]
-            img_list = []
-            for key in self.camera_names:
-                imgs = batch["image_frames"][key].flatten(0, 1).to(self.device) # (B*T, C, H, W)
-                img_list.append(imgs)
+            if "image_embeddings" in batch:
+                img_emb = batch["image_embeddings"].to(self.device)
+                B, _, T, _ = img_emb.shape
+                img_list = None
+            else:
+                B, T = batch["image_frames"][self.camera_names[0]].shape[:2]
+                img_list = []
+                for key in self.camera_names:
+                    imgs = batch["image_frames"][key].flatten(0, 1).to(self.device) # (B*T, C, H, W)
+                    img_list.append(imgs)
             
             lang_strs = batch["tasks"]
             trg = batch["targets"].to(self.device)
@@ -244,9 +250,10 @@ class SARMWorkspace:
 
             with torch.no_grad():
                 state = state_normalizer.normalize(state)
-                imgs_all = torch.cat(img_list, dim=0)  # (N * B * T, C, H, W)
-                img_emb = clip_encoder.encode_image(imgs_all)  # (N * B * T, D)
-                img_emb = img_emb.view(len(img_list), B, T, -1).permute(1, 0, 2, 3)  # (B, N, T, D)
+                if img_list is not None:
+                    imgs_all = torch.cat(img_list, dim=0)  # (N * B * T, C, H, W)
+                    img_emb = clip_encoder.encode_image(imgs_all)  # (N * B * T, D)
+                    img_emb = img_emb.view(len(img_list), B, T, -1).permute(1, 0, 2, 3)  # (B, N, T, D)
                 lang_emb = clip_encoder.encode_text(lang_strs) # lang_emb: (B, txt_dim)
 
             if cfg.model.no_state:
@@ -301,11 +308,16 @@ class SARMWorkspace:
 
         with torch.no_grad():
             def valid_step(batch, anno_type):
-                B, T = batch["image_frames"][self.camera_names[0]].shape[:2]
-                img_list = []
-                for key in self.camera_names:
-                    imgs = batch["image_frames"][key].flatten(0, 1).to(self.device) # (B*T, C, H, W)
-                    img_list.append(imgs)
+                if "image_embeddings" in batch:
+                    img_emb = batch["image_embeddings"].to(self.device)
+                    B, _, T, _ = img_emb.shape
+                    img_list = None
+                else:
+                    B, T = batch["image_frames"][self.camera_names[0]].shape[:2]
+                    img_list = []
+                    for key in self.camera_names:
+                        imgs = batch["image_frames"][key].flatten(0, 1).to(self.device) # (B*T, C, H, W)
+                        img_list.append(imgs)
                 
                 lang_strs = batch["tasks"]
                 trg = batch["targets"].to(self.device)
@@ -319,9 +331,10 @@ class SARMWorkspace:
                 state = state_normalizer.normalize(state)
 
                 # VLM encoding
-                imgs_all = torch.cat(img_list, dim=0)  # (N * B * T, C, H, W)
-                img_emb = clip_encoder.encode_image(imgs_all)  # (N * B * T, D)
-                img_emb = img_emb.view(len(img_list), B, T, -1).permute(1, 0, 2, 3)  # (B, N, T, D)
+                if img_list is not None:
+                    imgs_all = torch.cat(img_list, dim=0)  # (N * B * T, C, H, W)
+                    img_emb = clip_encoder.encode_image(imgs_all)  # (N * B * T, D)
+                    img_emb = img_emb.view(len(img_list), B, T, -1).permute(1, 0, 2, 3)  # (B, N, T, D)
                 lang_emb = clip_encoder.encode_text(lang_strs) # lang_emb: (B, txt_dim)
 
                 if cfg.model.no_state:
@@ -347,13 +360,13 @@ class SARMWorkspace:
                         "train/lr": subtask_scheduler.get_last_lr()[0],
                     }
 
-        dense_iter_train = infinite_loader(dataloader_train_dense)
-        dense_iter_val = infinite_loader(dataloader_val_dense)
         single_dataset_progress = (
             cfg.model.get("single_stage_progress", False)
             and cfg.general.get("dataset_format", "opensarm_v2") == "lerobot_v3_full_folding"
             and cfg.general.repo_id_sparse == cfg.general.repo_id_dense
         )
+        dense_iter_train = None if single_dataset_progress else infinite_loader(dataloader_train_dense)
+        dense_iter_val = None if single_dataset_progress else infinite_loader(dataloader_val_dense)
         
         # ==================== training loop ==================================
         best_val = float("inf")
@@ -366,13 +379,13 @@ class SARMWorkspace:
                 for sparse_batch in pbar:
                     if max_steps is not None and step >= max_steps:
                         break
-                    dense_batch = next(dense_iter_train)
                     sparse_batch = adapt_lerobot_batch_sarm(sparse_batch, camera_names=cfg.general.camera_names)
 
                     sparse_result = train_step(sparse_batch, anno_type="sparse")
                     if single_dataset_progress:
                         dense_result = sparse_result
                     else:
+                        dense_batch = next(dense_iter_train)
                         dense_batch = adapt_lerobot_batch_sarm(dense_batch, camera_names=cfg.general.camera_names)
                         dense_result = train_step(dense_batch, anno_type="dense")
 
@@ -406,13 +419,13 @@ class SARMWorkspace:
                 print("running validation...")
                 with torch.no_grad():
                     for sparse_batch in dataloader_val_sparse:
-                        dense_batch = next(dense_iter_val)
                         sparse_batch = adapt_lerobot_batch_sarm(sparse_batch, camera_names=cfg.general.camera_names)
 
                         sparse_result = valid_step(sparse_batch, anno_type="sparse")
                         if single_dataset_progress:
                             dense_result = sparse_result
                         else:
+                            dense_batch = next(dense_iter_val)
                             dense_batch = adapt_lerobot_batch_sarm(dense_batch, camera_names=cfg.general.camera_names)
                             dense_result = valid_step(dense_batch, anno_type="dense")
 
